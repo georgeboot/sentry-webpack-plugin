@@ -122,7 +122,7 @@ describe('afterEmitHook', () => {
       },
     };
 
-    compilation = { errors: [], hash: 'someHash' };
+    compilation = { errors: [], warnings: [], hash: 'someHash' };
     compilationDoneCallback = jest.fn();
   });
 
@@ -157,6 +157,25 @@ describe('afterEmitHook', () => {
       expect(compilationDoneCallback).toBeCalled();
       expect(compilation.errors).toEqual([
         'Sentry CLI Plugin: `include` option is required',
+      ]);
+      done();
+    });
+  });
+
+  test('warns and skips the release process without `release` option or failed propose-version call', done => {
+    mockCli.releases.proposeVersion.mockImplementationOnce(() =>
+      Promise.reject(new Error('Unable to detect a release'))
+    );
+    const sentryCliPlugin = new SentryCliPlugin({ include: 'src' });
+    sentryCliPlugin.apply(compiler);
+
+    setImmediate(() => {
+      expect(mockCli.releases.new).not.toBeCalled();
+      expect(mockCli.releases.uploadSourceMaps).not.toBeCalled();
+      expect(mockCli.releases.finalize).not.toBeCalled();
+      expect(compilationDoneCallback).toBeCalled();
+      expect(compilation.warnings).toEqual([
+        'Sentry CLI Plugin: unabled to determine version, skipping the release process. Make sure to include `release` config option or use the environment that supports auto-detection https://docs.sentry.io/cli/releases/#creating-releases',
       ]);
       done();
     });

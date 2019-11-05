@@ -74,6 +74,11 @@ function addCompilationError(compilation, message) {
   compilation.errors.push(`Sentry CLI Plugin: ${message}`);
 }
 
+/** Convenience function to add a webpack compilation warning. */
+function addCompilationWarning(compilation, message) {
+  compilation.warnings.push(`Sentry CLI Plugin: ${message}`);
+}
+
 class SentryCliPlugin {
   constructor(options = {}) {
     this.debug = options.debug || false;
@@ -165,14 +170,17 @@ class SentryCliPlugin {
   /**
    * Returns a Promise that will solve to the configured release.
    *
-   * If no release is specified, it uses Sentry CLI to propose a version. The
-   * release string is always trimmed.
+   * If no release is specified, it uses Sentry CLI to propose a version.
+   * The release string is always trimmed.
+   * Returns undefined if proposeVersion failed.
    */
   getReleasePromise() {
     return (this.options.release
       ? Promise.resolve(this.options.release)
       : this.cli.releases.proposeVersion()
-    ).then(version => `${version}`.trim());
+    )
+      .then(version => `${version}`.trim())
+      .catch(() => undefined);
   }
 
   /** Checks if the given named entry point should be handled. */
@@ -314,30 +322,38 @@ class SentryCliPlugin {
       return Promise.resolve();
     }
 
-    let release;
-    return this.release
-      .then(proposedVersion => {
-        release = proposedVersion;
-        return this.cli.releases.new(release);
-      })
-      .then(() => this.cli.releases.uploadSourceMaps(release, this.options))
-      .then(() => {
-        const { commit, previousCommit, repo, auto } =
-          this.options.setCommits || this.options;
+    return this.release.then(proposedVersion => {
+      if (!proposedVersion) {
+        addCompilationWarning(
+          compilation,
+          'unabled to determine version, skipping the release process. Make sure to include `release` config option or use the environment that supports auto-detection https://docs.sentry.io/cli/releases/#creating-releases'
+        );
+        return undefined;
+      }
 
-        if (repo && (commit || auto)) {
-          this.cli.releases.setCommits(release, {
-            commit,
-            previousCommit,
-            repo,
-            auto,
-          });
-        }
-      })
-      .then(() => this.cli.releases.finalize(release))
-      .catch(err =>
-        errorHandler(err, () => addCompilationError(compilation, err.message))
-      );
+      return this.cli.releases
+        .new(proposedVersion)
+        .then(() =>
+          this.cli.releases.uploadSourceMaps(proposedVersion, this.options)
+        )
+        .then(() => {
+          const { commit, previousCommit, repo, auto } =
+            this.options.setCommits || this.options;
+
+          if (repo && (commit || auto)) {
+            this.cli.releases.setCommits(proposedVersion, {
+              commit,
+              previousCommit,
+              repo,
+              auto,
+            });
+          }
+        })
+        .then(() => this.cli.releases.finalize(proposedVersion))
+        .catch(err =>
+          errorHandler(err, () => addCompilationError(compilation, err.message))
+        );
+    });
   }
 
   /** Webpack lifecycle hook to update compiler options. */
@@ -351,9 +367,9 @@ class SentryCliPlugin {
       this.injectRelease(compilerOptions);
     }
 
-    attachAfterEmitHook(compiler, (compilation, cb) => {
-      this.finalizeRelease(compilation).then(() => cb());
-    });
+    attachAfterEmitHook(compiler, (compilation, cb) =>
+      this.finalizeRelease(compilation).then(cb)
+    );
   }
 }
 
